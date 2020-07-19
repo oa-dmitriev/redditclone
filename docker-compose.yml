@@ -1,0 +1,25 @@
+version: "3"
+
+services:
+  db:
+    image: mysql
+    environment:
+      MYSQL_ROOT_PASSWORD: admin
+      MYSQL_DATABASE: redditclone
+    ports:
+      - "3305:3306"
+
+  mongodb:
+    image: "mongo"
+    environment:
+      - MONGO_INITDB_DATABASE=posts
+    ports:
+      - 27016:27017
+
+  web:
+    build: .
+    depends_on:
+      - db
+      - mongodb
+    ports:
+      - 8081:8080

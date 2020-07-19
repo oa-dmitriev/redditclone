@@ -1,24 +1,24 @@
 package user
 
 import (
+	"bytes"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"io/ioutil"
 	"net/http"
-	"strconv"
-	"sync"
+
+	"go.mongodb.org/mongo-driver/bson/primitive"
 )
 
 type User struct {
-	ID       string
-	Username string
-	password string
+	ID       primitive.ObjectID `bson:"id"`
+	Username string             `bson:"username"`
+	password string             `bson:"password"`
 }
 
 type UserRepo struct {
-	data   map[string]*User
-	lastID uint32
-	mux    *sync.RWMutex
+	DB *sql.DB
 }
 
 type AuthForm struct {
@@ -26,23 +26,15 @@ type AuthForm struct {
 	Password string `json:"password"`
 }
 
-func NewUserRepo() *UserRepo {
-	return &UserRepo{
-		data: map[string]*User{
-			"oleg": &User{
-				ID:       "0",
-				Username: "oleg",
-				password: "adminadmin",
-			},
-		},
-		lastID: 0,
-		mux:    &sync.RWMutex{},
-	}
+func NewUserRepo(db *sql.DB) *UserRepo {
+	return &UserRepo{DB: db}
 }
 
 func (repo *UserRepo) Register(r *http.Request) (*User, error) {
 	body, err := ioutil.ReadAll(r.Body)
 	r.Body.Close()
+	r.Body = ioutil.NopCloser(bytes.NewBuffer(body))
+
 	if err != nil {
 		return nil, Err("error reading the body")
 	}
@@ -54,15 +46,18 @@ func (repo *UserRepo) Register(r *http.Request) (*User, error) {
 	}
 
 	user := User{
-		ID:       strconv.Itoa(int(repo.lastID)),
+		ID:       primitive.NewObjectID(),
 		Username: fd.Username,
 		password: fd.Password,
 	}
 
-	repo.mux.Lock()
-	repo.data[fd.Username] = &user
-	repo.mux.Unlock()
-
+	_, err = repo.DB.Exec(
+		"INSERT INTO users (id, username, password) VALUES (?, ?, ?)",
+		primitive.ObjectID(user.ID).Hex(), user.Username, user.password,
+	)
+	if err != nil {
+		return nil, Err(err.Error())
+	}
 	return &user, nil
 }
 
@@ -78,15 +73,20 @@ func (repo *UserRepo) Authorize(r *http.Request) (*User, error) {
 	if err != nil {
 		return nil, Err("cant unpack payload")
 	}
+	user := User{}
 
-	repo.mux.RLock()
-	user, exist := repo.data[fd.Username]
-	if !exist || fd.Password != user.password {
+	var id string
+	err = repo.DB.
+		QueryRow("SELECT id, username, password FROM users WHERE username=? AND password=?", fd.Username, fd.Password).
+		Scan(&id, &user.Username, &user.password)
+	if err != nil {
 		return nil, Err("invalid password")
 	}
-	repo.mux.RUnlock()
-
-	return user, nil
+	user.ID, err = primitive.ObjectIDFromHex(id)
+	if err != nil {
+		return nil, Err("server error")
+	}
+	return &user, nil
 }
 
 func Err(msg string) error {

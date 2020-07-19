@@ -6,9 +6,9 @@ import (
 	"io/ioutil"
 	"net/http"
 	"redditclone/pkg/posts"
-	"strconv"
 
 	"github.com/gorilla/mux"
+	"go.mongodb.org/mongo-driver/bson/primitive"
 	"go.uber.org/zap"
 )
 
@@ -37,7 +37,6 @@ func (h *PostsHandler) NewPost(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown payload", http.StatusBadRequest)
 		return
 	}
-
 	user, err := getCurrentUser(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
@@ -68,11 +67,12 @@ func (h *PostsHandler) NewPost(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	w.Write(resp)
+
 }
 
 func (h *PostsHandler) DelPost(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	postID, err := strconv.ParseUint(vars["POST_ID"], 10, 64)
+	postID, err := primitive.ObjectIDFromHex(vars["POST_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
@@ -87,7 +87,7 @@ func (h *PostsHandler) DelPost(w http.ResponseWriter, r *http.Request) {
 
 func (h *PostsHandler) GetByID(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	postID, err := strconv.ParseUint(vars["POST_ID"], 10, 64)
+	postID, err := primitive.ObjectIDFromHex(vars["POST_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
@@ -143,7 +143,7 @@ func (h *PostsHandler) Comment(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vars := mux.Vars(r)
-	postID, err := strconv.ParseUint(vars["POST_ID"], 10, 64)
+	postID, err := primitive.ObjectIDFromHex(vars["POST_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
@@ -164,12 +164,12 @@ func (h *PostsHandler) Comment(w http.ResponseWriter, r *http.Request) {
 
 func (h *PostsHandler) DelComment(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	postID, err := strconv.ParseUint(vars["POST_ID"], 10, 64)
+	postID, err := primitive.ObjectIDFromHex(vars["POST_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
 	}
-	commentID, err := strconv.ParseUint(vars["COMMENT_ID"], 10, 64)
+	commentID, err := primitive.ObjectIDFromHex(vars["COMMENT_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
@@ -206,7 +206,7 @@ func (h *PostsHandler) Category(w http.ResponseWriter, r *http.Request) {
 
 func (h *PostsHandler) Upvote(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	postID, err := strconv.ParseUint(vars["POST_ID"], 10, 64)
+	postID, err := primitive.ObjectIDFromHex(vars["POST_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
@@ -231,7 +231,7 @@ func (h *PostsHandler) Upvote(w http.ResponseWriter, r *http.Request) {
 
 func (h *PostsHandler) Downvote(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	postID, err := strconv.ParseUint(vars["POST_ID"], 10, 64)
+	postID, err := primitive.ObjectIDFromHex(vars["POST_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
@@ -256,7 +256,7 @@ func (h *PostsHandler) Downvote(w http.ResponseWriter, r *http.Request) {
 
 func (h *PostsHandler) Unvote(w http.ResponseWriter, r *http.Request) {
 	vars := mux.Vars(r)
-	postID, err := strconv.ParseUint(vars["POST_ID"], 10, 64)
+	postID, err := primitive.ObjectIDFromHex(vars["POST_ID"])
 	if err != nil {
 		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return

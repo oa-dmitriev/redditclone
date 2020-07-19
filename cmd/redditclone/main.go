@@ -4,43 +4,56 @@ import (
 	"html/template"
 	"log"
 	"net/http"
+	"redditclone/pkg/database"
 	"redditclone/pkg/handlers"
 	"redditclone/pkg/middleware"
 	"redditclone/pkg/posts"
 	"redditclone/pkg/session"
 	"redditclone/pkg/user"
+	"time"
 
-	"go.uber.org/zap"
-
+	_ "github.com/go-sql-driver/mysql"
 	"github.com/gorilla/mux"
+	"go.uber.org/zap"
 )
 
 func main() {
-	templates := template.Must(template.ParseGlob("../../template/index.html"))
+	time.Sleep(30 * time.Second)
 
-	sm := session.NewSessionsMem()
+	db, err := database.GetMysql()
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+	collection, err := database.GetCollection()
+	if err != nil {
+		log.Fatal(err.Error())
+	}
+
+	/*---------------------------------*/
+
+	templates := template.Must(template.ParseGlob("./template/index.html"))
+
+	sm := session.NewSessionsMem(db)
 	zapLogger, _ := zap.NewProduction()
 	defer zapLogger.Sync()
 	logger := zapLogger.Sugar()
 
-	userRepo := user.NewUserRepo()
-	postsRepo := posts.NewRepo()
+	userRepo := user.NewUserRepo(db)
+	postsRepo := posts.NewRepo(collection)
 
 	userHandler := &handlers.UserHandler{
 		Tmpl:     templates,
 		UserRepo: userRepo,
-		Logger:   logger,
 		Sessions: sm,
 	}
 
 	handlers := &handlers.PostsHandler{
 		Tmpl:      templates,
-		Logger:    logger,
 		PostsRepo: postsRepo,
 	}
 	appMux := mux.NewRouter()
 
-	appMux.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("../../template/static"))))
+	appMux.PathPrefix("/static/").Handler(http.StripPrefix("/static/", http.FileServer(http.Dir("./template/static"))))
 
 	appMux.HandleFunc("/", userHandler.Index).Methods("GET")
 	appMux.HandleFunc("/api/register", userHandler.Register).Methods("POST")
@@ -65,7 +78,7 @@ func main() {
 	mux = middleware.AccessLog(logger, mux)
 	mux = middleware.Panic(mux)
 
-	addr := ":8080"
+	addr := "8080"
 	log.Printf("Listening on %s...\n", addr)
-	http.ListenAndServe(addr, mux)
+	log.Fatal(http.ListenAndServe(":"+addr, mux))
 }

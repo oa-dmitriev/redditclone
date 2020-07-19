@@ -1,55 +1,49 @@
 package posts
 
 import (
+	"context"
 	"fmt"
 	"redditclone/pkg/user"
-	"sync"
-	"sync/atomic"
 	"time"
+
+	"go.mongodb.org/mongo-driver/bson"
+	"go.mongodb.org/mongo-driver/bson/primitive"
+	"go.mongodb.org/mongo-driver/mongo"
+	"go.mongodb.org/mongo-driver/mongo/options"
 )
 
 type PostsRepo struct {
-	lastID uint64
-	data   map[uint64]*Post
-	mux    *sync.RWMutex
+	data *mongo.Collection
 }
 
-func NewRepo() *PostsRepo {
-	return &PostsRepo{
-		lastID: 0,
-		data:   make(map[uint64]*Post),
-		mux:    &sync.RWMutex{},
-	}
+func NewRepo(collection *mongo.Collection) *PostsRepo {
+	return &PostsRepo{data: collection}
 }
 
 func (repo *PostsRepo) GetAll() ([]*Post, error) {
-	posts := make([]*Post, 0, 10)
-
-	repo.mux.Lock()
-	for _, val := range repo.data {
-		posts = append(posts, val)
+	posts := []*Post{}
+	curs, err := repo.data.Find(context.TODO(), bson.D{{}})
+	if err != nil {
+		return nil, err
 	}
-	repo.mux.Unlock()
-
+	err = curs.All(context.TODO(), &posts)
+	if err != nil {
+		return nil, err
+	}
 	return posts, nil
 }
 
 func (repo *PostsRepo) GetByCategory(category string) ([]*Post, error) {
-	posts := make([]*Post, 0, 10)
-
-	repo.mux.Lock()
-	for _, val := range repo.data {
-		if val.Category == category {
-			posts = append(posts, val)
-		}
+	posts := []*Post{}
+	curs, err := repo.data.Find(context.TODO(), bson.D{primitive.E{Key: "category", Value: category}})
+	if err != nil {
+		return nil, err
 	}
-	repo.mux.Unlock()
-
+	curs.All(context.TODO(), &posts)
 	return posts, nil
 }
 
 func (repo *PostsRepo) NewPost(u *user.User, pd *CreateForm) (*Post, error) {
-	repo.mux.Lock()
 	post := Post{
 		Score:    1,
 		Type:     pd.Type,
@@ -59,163 +53,175 @@ func (repo *PostsRepo) NewPost(u *user.User, pd *CreateForm) (*Post, error) {
 		Text:     pd.Text,
 		URL:      pd.URL,
 		Votes: []*Vote{
-			&Vote{
+			{
 				UserID: u.ID,
 				Value:  1,
 			},
 		},
+		Comments:         make([]*Comment, 0, 10),
 		Created:          time.Now(),
 		UpvotePercentage: 100,
-		ID:               repo.lastID,
+		ID:               primitive.NewObjectID(),
 	}
-	repo.data[post.ID] = &post
-	repo.lastID++
-	repo.mux.Unlock()
+	_, err := repo.data.InsertOne(context.TODO(), &post)
+	if err != nil {
+		return nil, err
+	}
 	return &post, nil
 }
 
-func (repo *PostsRepo) DelPost(ID uint64) error {
-
-	repo.mux.RLock()
-	_, ok := repo.data[ID]
-	repo.mux.RUnlock()
-
-	if ok {
-		repo.mux.Lock()
-		delete(repo.data, ID)
-		repo.mux.Unlock()
-		return nil
-	}
-	return Err("no post to delete")
+func (repo *PostsRepo) DelPost(ID primitive.ObjectID) error {
+	_, err := repo.data.DeleteOne(context.TODO(), bson.D{primitive.E{Key: "_id", Value: ID}})
+	return err
 }
 
-func (repo *PostsRepo) GetByID(ID uint64) (*Post, error) {
-	repo.mux.RLock()
-	post, ok := repo.data[ID]
-	repo.mux.RUnlock()
-
-	if ok {
-		atomic.AddUint64(&post.Views, 1)
-		return post, nil
+func (repo *PostsRepo) GetByID(ID primitive.ObjectID) (*Post, error) {
+	post := Post{}
+	update := bson.D{primitive.E{Key: "$inc", Value: bson.D{primitive.E{Key: "views", Value: 1}}}}
+	filter := bson.D{primitive.E{Key: "_id", Value: ID}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(1)
+	err := repo.data.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&post)
+	if err != nil {
+		return nil, Err("no post with that id")
 	}
-	return nil, Err("no post with that id")
+	return &post, nil
 }
 
 func (repo *PostsRepo) GetByUser(username string) ([]*Post, error) {
-	posts := make([]*Post, 0, 10)
-	repo.mux.Lock()
-	for _, v := range repo.data {
-		if username == v.Author.Username {
-			posts = append(posts, v)
-		}
+	posts := []*Post{}
+	filter := bson.D{primitive.E{Key: "author.username", Value: username}}
+	curs, err := repo.data.Find(context.TODO(), filter)
+	if err != nil {
+		return nil, err
 	}
-	repo.mux.Unlock()
+	curs.All(context.TODO(), &posts)
 	return posts, nil
 }
 
-func (repo *PostsRepo) Comment(ID uint64, user *user.User, message string) (*Post, error) {
-	repo.mux.RLock()
-	post, ok := repo.data[ID]
-	repo.mux.RUnlock()
-
-	if ok {
-		repo.mux.Lock()
-		comment := &Comment{
-			Created: time.Now(),
-			Author:  user,
-			Body:    message,
-			ID:      post.lastCommentID,
-		}
-		post.lastCommentID++
-		post.Comments = append(post.Comments, comment)
-		repo.mux.Unlock()
-		return post, nil
+func (repo *PostsRepo) Comment(ID primitive.ObjectID, user *user.User, message string) (*Post, error) {
+	post := Post{}
+	comment := &Comment{
+		Created: time.Now(),
+		Author:  user,
+		Body:    message,
+		ID:      primitive.NewObjectID(),
 	}
-	return nil, Err("no post with that id")
+
+	update := bson.D{primitive.E{Key: "$push", Value: bson.D{primitive.E{Key: "comments", Value: comment}}}}
+	filter := bson.D{primitive.E{Key: "_id", Value: ID}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(1)
+
+	err := repo.data.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&post)
+	if err != nil {
+		return nil, Err("no post with that id")
+	}
+	return &post, nil
 }
 
-func (repo *PostsRepo) DelComment(postID, commentID uint64) (*Post, error) {
+func (repo *PostsRepo) DelComment(postID, commentID primitive.ObjectID) (*Post, error) {
+	update := bson.D{primitive.E{Key: "$pull",
+		Value: bson.D{primitive.E{Key: "comments",
+			Value: bson.D{primitive.E{Key: "_id", Value: commentID}}}}}}
+	filter := bson.D{
+		primitive.E{
+			Key:   "_id",
+			Value: postID,
+		},
+	}
+	opts := options.FindOneAndUpdate().SetReturnDocument(1)
+	post := Post{}
 
-	post, err := repo.GetByID(postID)
+	err := repo.data.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&post)
 	if err != nil {
-		Err("no post found")
+		return nil, Err("no comment found")
 	}
-
-	repo.mux.Lock()
-	for i, c := range post.Comments {
-		if c.ID == commentID {
-			post.Comments[i] = post.Comments[len(post.Comments)-1]
-			post.Comments = post.Comments[:len(post.Comments)-1]
-			return post, nil
-		}
-	}
-	repo.mux.Unlock()
-	return nil, Err("no comment found")
+	return &post, nil
 }
 
-func (repo *PostsRepo) Upvote(user *user.User, postID uint64) (*Post, error) {
-	post, err := repo.GetByID(postID)
-	if err != nil {
-		return nil, Err("no post found")
-	}
+func (repo *PostsRepo) Upvote(user *user.User, postID primitive.ObjectID) (*Post, error) {
+	filter := bson.D{primitive.E{Key: "_id", Value: postID}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(1)
 
-	repo.mux.Lock()
-	for _, v := range post.Votes {
-		if v.UserID == user.ID {
-			post.Score -= v.Value
-			post.Score++
-			v.Value = 1
-			repo.mux.Unlock()
-			return post, nil
+	post := Post{}
+	err := repo.data.FindOne(context.TODO(), filter).Decode(&post)
+	if err != nil {
+		return nil, Err("bd: couldn't fetch query")
+	}
+	for _, val := range post.Votes {
+		if val.UserID == user.ID {
+			post.Score -= val.Value - 1
+			val.Value = 1
+			_, err = repo.data.ReplaceOne(context.TODO(), filter, &post)
+			if err != nil {
+				return nil, Err("bd: couldn't execute query")
+			}
+			return &post, nil
 		}
 	}
-	post.Votes = append(post.Votes, &Vote{user.ID, 1})
-	post.Score += 1
-	repo.mux.Unlock()
-
-	return post, nil
+	vote := Vote{user.ID, 1}
+	update := bson.D{
+		primitive.E{Key: "$push", Value: bson.D{primitive.E{Key: "votes", Value: &vote}}},
+		primitive.E{Key: "$inc", Value: bson.D{primitive.E{Key: "score", Value: 1}}},
+	}
+	err = repo.data.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&post)
+	if err != nil {
+		return nil, Err("db error")
+	}
+	return &post, nil
 }
 
-func (repo *PostsRepo) Downvote(user *user.User, postID uint64) (*Post, error) {
-	post, err := repo.GetByID(postID)
-	if err != nil {
-		return nil, Err("no such post")
-	}
+func (repo *PostsRepo) Downvote(user *user.User, postID primitive.ObjectID) (*Post, error) {
+	filter := bson.D{primitive.E{Key: "_id", Value: postID}}
+	opts := options.FindOneAndUpdate().SetReturnDocument(1)
 
-	repo.mux.Lock()
-	for _, v := range post.Votes {
-		if v.UserID == user.ID {
-			post.Score -= v.Value
-			post.Score--
-			v.Value = -1
-			repo.mux.Unlock()
-			return post, nil
+	post := Post{}
+	err := repo.data.FindOne(context.TODO(), filter).Decode(&post)
+	if err != nil {
+		return nil, Err("bd: couldn't fetch query")
+	}
+	for _, val := range post.Votes {
+		if val.UserID == user.ID {
+			post.Score -= val.Value + 1
+			val.Value = -1
+			_, err = repo.data.ReplaceOne(context.TODO(), filter, &post)
+			if err != nil {
+				return nil, Err("bd: couldn't execute query")
+			}
+			return &post, nil
 		}
 	}
-	post.Votes = append(post.Votes, &Vote{user.ID, -1})
-	post.Score -= 1
-	repo.mux.Unlock()
-	return post, nil
+	vote := Vote{user.ID, -1}
+	update := bson.D{
+		primitive.E{Key: "$push", Value: bson.D{primitive.E{Key: "votes", Value: &vote}}},
+		primitive.E{Key: "$inc", Value: bson.D{primitive.E{Key: "score", Value: -1}}},
+	}
+	err = repo.data.FindOneAndUpdate(context.TODO(), filter, update, opts).Decode(&post)
+	if err != nil {
+		return nil, Err("db error")
+	}
+	return &post, nil
 }
 
-func (repo *PostsRepo) Unvote(user *user.User, postID uint64) (*Post, error) {
-	post, err := repo.GetByID(postID)
+func (repo *PostsRepo) Unvote(user *user.User, postID primitive.ObjectID) (*Post, error) {
+	filter := bson.D{primitive.E{Key: "_id", Value: postID}}
+	post := Post{}
+	err := repo.data.FindOne(context.TODO(), filter).Decode(&post)
 	if err != nil {
-		return nil, Err("no such post")
+		return nil, Err("bd: couldn't fetch query")
 	}
-
-	repo.mux.Lock()
-	for i, v := range post.Votes {
-		if v.UserID == user.ID {
-			post.Score -= v.Value
+	for i, val := range post.Votes {
+		if val.UserID == user.ID {
+			post.Score -= val.Value
 			post.Votes[i] = post.Votes[len(post.Votes)-1]
 			post.Votes = post.Votes[:len(post.Votes)-1]
-			repo.mux.Unlock()
-			return post, nil
+			_, err = repo.data.ReplaceOne(context.TODO(), filter, &post)
+			if err != nil {
+				return nil, Err("bd: couldn't execute query")
+			}
+			return &post, nil
 		}
 	}
-	repo.mux.Unlock()
-	return post, nil
+	return nil, Err("you haven't voted yet")
 }
 
 func Err(msg string) error {

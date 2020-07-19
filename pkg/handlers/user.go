@@ -32,26 +32,12 @@ func (h *UserHandler) Register(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "unknown payload", http.StatusBadRequest)
 		return
 	}
-	u, err := h.UserRepo.Register(r)
+	_, err := h.UserRepo.Register(r)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-
-	sess, err := h.Sessions.Create(w, u.ID, u.Username)
-	if err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
-		return
-	}
-	resp, err := json.Marshal(map[string]interface{}{
-		"token": sess.ID,
-	})
-	if err != nil {
-		http.Error(w, Err("bad request").Error(), http.StatusInternalServerError)
-		return
-	}
-	w.WriteHeader(http.StatusCreated)
-	w.Write(resp)
+	h.Login(w, r)
 }
 
 func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
@@ -67,15 +53,16 @@ func (h *UserHandler) Login(w http.ResponseWriter, r *http.Request) {
 
 	sess, err := h.Sessions.Create(w, u.ID, u.Username)
 	if err != nil {
+		fmt.Println("CREATE FAILED MAINAIANIANA")
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
 	}
 
 	resp, err := json.Marshal(map[string]interface{}{
-		"token": sess.ID,
+		"token": sess.Sid,
 	})
 	if err != nil {
-		http.Error(w, Err("bad request").Error(), http.StatusInternalServerError)
+		http.Error(w, Err("server error").Error(), http.StatusInternalServerError)
 		return
 	}
 	w.Write(resp)
@@ -101,28 +88,11 @@ func getClaims(inToken string) (jwt.MapClaims, error) {
 }
 
 func getCurrentUser(r *http.Request) (*user.User, error) {
-	inToken, err := r.Cookie("token")
-	if err == http.ErrNoCookie {
-		return nil, err
+	sess, err := session.SessionFromContext(r.Context())
+	if err != nil {
+		return nil, Err("no session")
 	}
-	user := &user.User{}
-	claims, err := getClaims(inToken.Value)
-	_, ok := claims["user"]
-	if !ok {
-		return nil, Err("no user in claims")
-	}
-	userClaims, ok := claims["user"].(map[string]interface{})
-	if !ok {
-		return nil, Err("cant unpack payload")
-	}
-	user.ID, ok = userClaims["id"].(string)
-	if !ok {
-		return nil, Err("user id expected to be string")
-	}
-	user.Username, ok = userClaims["username"].(string)
-	if !ok {
-		return nil, Err("username expected to be string")
-	}
+	user := &user.User{ID: sess.UserID, Username: sess.Username}
 	return user, nil
 }
 

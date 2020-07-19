@@ -1,0 +1,8 @@
+[Unit]
+Description=SuperApp
+
+[Service]
+ExecStart=/home/ubuntu/bin/reddit
+
+[Install]
+WantedBy=multi-user.target

@@ -1,0 +1,28 @@
+---
+  - name: "Install nginx"
+    hosts: web
+    become: yes
+    tasks:
+      - name: "Install nginx from apt"
+        apt:
+          name: nginx
+          state: present
+
+      - name: "Copy nginx conf"
+        copy:
+          src: files/app.conf
+          dest: /etc/nginx/sites-available/default
+      
+      - name: "Copy superApp service"
+        copy: 
+          src: files/superapp.service
+          dest: /etc/systemd/system/superapp.service
+
+      - name: "Reload nginx"
+        command: nginx -s reload
+
+  - name: "Install docker"
+    become: yes
+    hosts: all
+    roles:
+      - geerlingguy.docker
